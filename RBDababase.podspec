@@ -2,7 +2,7 @@
 
 Pod::Spec.new do |s|
   s.name             = 'RBDababase'
-  s.version="1.1.1"
+  s.version="1.0.0"
   s.summary          = 'A short description of RBDababase'
   s.description      = <<-DESC
 TODO: Add long description of the pod here.

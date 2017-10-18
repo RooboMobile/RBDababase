@@ -1,19 +1,20 @@
 //
-//  RBFMDB.m
+//  RTDababaseManager.m
 //  Pods
 //
-//  Created by baxiang on 2017/10/17.
+//  Created by baxiang on 2017/10/18.
 //
 
-#import "RBDababaseManager.h"
+#import "RTDababaseManager.h"
 #import <objc/runtime.h>
 #import "FMDB.h"
-#define FLDB_DEFAULT_NAME @"roobo"
 
-#define FLFMDBQUEUEMANAGER [RBDababaseManager shareManager:FLDB_DEFAULT_NAME]
 
-#define FLCURRENTDBQUEUE (FMDatabaseQueue *)self.queueDictM[self.dbName]
-@interface RBDababaseManager()
+
+
+#define RTDatabaseQueue (FMDatabaseQueue *)self.queueDictM[self.dbName]
+
+@interface RTDababaseManager()
 
 @property (nonatomic,copy)NSString *dbName;
 
@@ -21,8 +22,7 @@
 
 @end
 
-@implementation RBDababaseManager
-
+@implementation RTDababaseManager
 + (instancetype)shareManager:(NSString *)dbName{
     
     // 1、获取沙盒中数据库的路径
@@ -32,46 +32,72 @@
         tempDBName = dbName;
     }
     else{
-        tempDBName = FLDB_DEFAULT_NAME;
+        tempDBName = RT_DEFAULT_NAME;
     }
-    
     NSString *sqlFilePath = [path stringByAppendingPathComponent:[tempDBName stringByAppendingString:@".sqlite"]];
-    
-    // 2、判断 caches 文件夹是否存在.不存在则创建
-    NSFileManager *manager = [NSFileManager defaultManager];
-    BOOL isDirectory = YES;
-    BOOL tag = [manager fileExistsAtPath:sqlFilePath isDirectory:&isDirectory];
-    
-    
-    static RBDababaseManager *instance = nil;
+    NSLog(@"数据库路径%@",sqlFilePath);
+    static RTDababaseManager *instance = nil;
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
         instance = [[self alloc] init];
         instance.queueDictM = [NSMutableDictionary dictionary];
-        if (tag) {
-            // 通过路径创建数据库
-            FMDatabaseQueue *queue = [FMDatabaseQueue databaseQueueWithPath:sqlFilePath];
-            [instance.queueDictM setValue:queue forKey:tempDBName];
-        }
-    });
-    
-    if (!tag) {
-        [manager createDirectoryAtPath:path withIntermediateDirectories:YES attributes:nil error:NULL];
-        // 通过路径创建数据库
         FMDatabaseQueue *queue = [FMDatabaseQueue databaseQueueWithPath:sqlFilePath];
-        if (!instance.queueDictM) {
-            instance.queueDictM = [NSMutableDictionary dictionary];
-        }
         [instance.queueDictM setValue:queue forKey:tempDBName];
-    }
-    
+    });
     instance.dbName = tempDBName;
-    
     return instance;
 }
 
-#pragma mark -- public method
+- (BOOL)isExit:(FMDatabase *)db table:(NSString*)name{
+    BOOL success = [db open];
+    if (success){
+        FMResultSet *rs = [db executeQuery:@"select count(*) as 'count' from sqlite_master where type ='table' and name = ?", name];
+        if (rs) {
+            success = NO;
+            while ([rs next]){
+                NSInteger count = [rs intForColumn:@"count"];
+                if (0 == count){
+                    success = NO;
+                }
+                else{
+                    success = YES;
+                    break;
+                }
+            }
+        }
+        else{
+            success = NO;
+        }
+    }
+    return success;
+}
+#pragma mark 更新登录用户数据
 
+-(void)insertUser:(RBUserModel*)model
+{
+    [RTDatabaseQueue inTransaction:^(FMDatabase * _Nonnull db, BOOL * _Nonnull rollback) {
+        if ([db open]) {
+            if (![self isExit:db table:@"User"]) { // 表不存在
+                NSString *createSql = @"CREATE TABLE IF NOT EXISTS User (\
+                                       userid TEXT PRIMARY KEY,\
+                                       name TEXT,\
+                                       token TEXT NOT NULL,\
+                                       headimg TEXT NOT NULL \
+                                       )";
+                BOOL isSuccess =  [db executeUpdate:createSql];
+            }
+                NSString *inserSql = @"INSERT INTO User\
+                                       (userid, name, token,headimg) VALUES \
+                                       (?, ?, ?,?)\
+                                       ";
+              [db executeUpdate:inserSql, model.userid,model.name,model.token,model.headimg];
+        }
+    }];
+    
+}
+
+
+#pragma mark -- public method
 
 - (void)createTable:(Class)modelClass complete:(void(^)(BOOL flag))complete{
     // 创建完毕不关闭数据库，执行完其他操作会关闭
@@ -103,14 +129,14 @@
 - (void)searchModelArr:(Class)modelClass autoCloseDB:(BOOL)autoCloseDB complete:(void(^)(NSArray *modelArr))complete{
     __block NSArray *modelArr = nil;
     __weak typeof(self) weakSelf = self;
-    FLDISPATCH_ASYNC_GLOBAL(^{
+    RTDISPATCH_ASYNC_GLOBAL(^{
         //把任务包装到事务里
-        [FLCURRENTDBQUEUE inTransaction:^(FMDatabase *db, BOOL *rollback){
+        [RTDatabaseQueue inTransaction:^(FMDatabase *db, BOOL *rollback){
             typeof(self) strongSelf = weakSelf;
             modelArr = [strongSelf search:db modelArr:modelClass autoCloseDB:autoCloseDB];
             // 回调
             if (complete) {
-                FLDISPATCH_ASYNC_MAIN(^{
+                RTDISPATCH_ASYNC_MAIN(^{
                     complete(modelArr);
                 });
             }
@@ -130,15 +156,15 @@
 - (void)modifyModel:(id)model byID:(NSString *)FLDBID autoCloseDB:(BOOL)autoCloseDB complete:(void(^)(BOOL flag))complete{
     __block BOOL success = true;
     __weak typeof(self) weakSelf = self;
-    FLDISPATCH_ASYNC_GLOBAL(^{
+    RTDISPATCH_ASYNC_GLOBAL(^{
         //把任务包装到事务里
-        [FLCURRENTDBQUEUE inTransaction:^(FMDatabase *db, BOOL *rollback){
+        [RTDatabaseQueue inTransaction:^(FMDatabase *db, BOOL *rollback){
             typeof(self) strongSelf = weakSelf;
             
             success = [strongSelf modify:db model:model byID:FLDBID autoCloseDB:autoCloseDB];
             // 回调
             if (complete) {
-                FLDISPATCH_ASYNC_MAIN(^{
+                RTDISPATCH_ASYNC_MAIN(^{
                     complete(success);
                 });
             }
@@ -159,15 +185,15 @@
 - (void)dropTable:(Class)modelClass autoCloseDB:(BOOL)autoCloseDB complete:(void(^)(BOOL flag))complete{
     __block BOOL success = true;
     __weak typeof(self) weakSelf = self;
-    FLDISPATCH_ASYNC_GLOBAL(^{
+    RTDISPATCH_ASYNC_GLOBAL(^{
         //把任务包装到事务里
-        [FLCURRENTDBQUEUE inTransaction:^(FMDatabase *db, BOOL *rollback){
+        [RTDatabaseQueue inTransaction:^(FMDatabase *db, BOOL *rollback){
             typeof(self) strongSelf = weakSelf;
             
             success = [strongSelf drop:db table:modelClass autoCloseDB:autoCloseDB];
             // 回调
             if (complete) {
-                FLDISPATCH_ASYNC_MAIN(^{
+                RTDISPATCH_ASYNC_MAIN(^{
                     complete(success);
                 });
             }
@@ -185,7 +211,7 @@
 //    NSString *sqlStr = @"select table_name from information_schema.tables where TABLE_SCHEMA = 'gitkong.sqlite'";
 //    __weak typeof(self) weakSelf = self;
 //    __block BOOL success = true;
-//    [FLCURRENTDBQUEUE inTransaction:^(FMDatabase *db, BOOL *rollback) {
+//    [RTDBManager inTransaction:^(FMDatabase *db, BOOL *rollback) {
 //
 //        typeof(self) strongSelf = weakSelf;
 //        FMResultSet *rs = [db executeQuery:sqlStr];
@@ -218,15 +244,15 @@
     __block BOOL success = true;
     __weak typeof(self) weakSelf = self;
     
-    FLDISPATCH_ASYNC_GLOBAL(^{
+    RTDISPATCH_ASYNC_GLOBAL(^{
         //把任务包装到事务里
-        [FLCURRENTDBQUEUE inTransaction:^(FMDatabase *db, BOOL *rollback){
+        [RTDatabaseQueue inTransaction:^(FMDatabase *db, BOOL *rollback){
             typeof(self) strongSelf = weakSelf;
             
             success = [strongSelf delete:db allModel:modelClass autoCloseDB:autoCloseDB];
             // 回调
             if (complete) {
-                FLDISPATCH_ASYNC_MAIN(^{
+                RTDISPATCH_ASYNC_MAIN(^{
                     complete(success);
                 });
             }
@@ -247,15 +273,15 @@
 - (void)deleteModel:(Class)modelClass byId:(NSString *)FLDBID autoCloseDB:(BOOL)autoCloseDB complete:(void(^)(BOOL flag))complete{
     __block BOOL success = true;
     __weak typeof(self) weakSelf = self;
-    FLDISPATCH_ASYNC_GLOBAL(^{
+    RTDISPATCH_ASYNC_GLOBAL(^{
         //把任务包装到事务里
-        [FLCURRENTDBQUEUE inTransaction:^(FMDatabase *db, BOOL *rollback){
+        [RTDatabaseQueue inTransaction:^(FMDatabase *db, BOOL *rollback){
             typeof(self) strongSelf = weakSelf;
             
             success = [strongSelf delete:db model:modelClass byId:FLDBID autoCloseDB:autoCloseDB];
             // 回调
             if (complete) {
-                FLDISPATCH_ASYNC_MAIN(^{
+                RTDISPATCH_ASYNC_MAIN(^{
                     complete(success);
                 });
             }
@@ -386,8 +412,8 @@
     __block BOOL success = true;
     __weak typeof(self) weakSelf = self;
     //把任务包装到事务里
-    FLDISPATCH_ASYNC_GLOBAL(^{
-        [FLCURRENTDBQUEUE inTransaction:^(FMDatabase *db, BOOL *rollback){
+    RTDISPATCH_ASYNC_GLOBAL(^{
+        [RTDatabaseQueue inTransaction:^(FMDatabase *db, BOOL *rollback){
             typeof(self) strongSelf = weakSelf;
             
             success = [strongSelf isExit:db table:modelClass autoCloseDB:autoCloseDB];
@@ -395,7 +421,7 @@
             //strongSelf.db = db;
             // 回调回去
             if (complete) {
-                FLDISPATCH_ASYNC_MAIN(^{
+                RTDISPATCH_ASYNC_MAIN(^{
                     complete(success);
                 });
             }
@@ -409,6 +435,35 @@
 }
 
 - (BOOL)isExit:(FMDatabase *)db table:(Class)modelClass autoCloseDB:(BOOL)autoCloseDB{
+    
+    //    BOOL success = [db open];
+    //    FMResultSet *resultSet = nil;
+    //
+    //    resultSet = [db executeQuery:@"SELECT * FROM sqlite_master where type='table';"];
+    //    if (resultSet == nil) {
+    //        success = NO;
+    //    }
+    //    // 遍历查询结果
+    //    while ([resultSet next]) {
+    //        NSString *str1 = [resultSet stringForColumnIndex:1];
+    //        if ([str1 isEqualToString:NSStringFromClass(modelClass)]) {
+    //            success = YES;
+    //            break;
+    //        }
+    //        else{
+    //            success = NO;
+    //        }
+    //    }
+    //    // 操作完毕是否需要关闭
+    //    if (autoCloseDB) {
+    //        [self fl_closeDB:db];
+    //    }
+    //    return success;
+    /**
+     *  @author gitKong
+     *
+     *  以下方法不安全，会导致有时候判断不正确
+     */
     BOOL success = [db open];
     if (success){
         FMResultSet *rs = [db executeQuery:@"select count(*) as 'count' from sqlite_master where type ='table' and name = ?", modelClass];
@@ -449,15 +504,15 @@
     __block BOOL success = true;
     __weak typeof(self) weakSelf = self;
     
-    FLDISPATCH_ASYNC_GLOBAL(^{
+    RTDISPATCH_ASYNC_GLOBAL(^{
         //把任务包装到事务里
-        [FLCURRENTDBQUEUE inTransaction:^(FMDatabase *db, BOOL *rollback){
+        [RTDatabaseQueue inTransaction:^(FMDatabase *db, BOOL *rollback){
             typeof(self) strongSelf = weakSelf;
             success = [strongSelf create:db table:modelClass autoCloseDB:autoCloseDB];
             
             // 回调
             if (complete) {
-                FLDISPATCH_ASYNC_MAIN(^{
+                RTDISPATCH_ASYNC_MAIN(^{
                     complete(success);
                 });
             }
@@ -508,13 +563,13 @@
     __block BOOL success = true;
     __weak typeof(self) weakSelf = self;
     if (inAsync) {
-        FLDISPATCH_ASYNC_GLOBAL(^{
+        RTDISPATCH_ASYNC_GLOBAL(^{
             //把任务包装到事务里
-            [FLCURRENTDBQUEUE inTransaction:^(FMDatabase *db, BOOL *rollback){
+            [RTDatabaseQueue inTransaction:^(FMDatabase *db, BOOL *rollback){
                 typeof(self) strongSelf = weakSelf;
                 success = [strongSelf insert:db model:model autoCloseDB:autoCloseDB];
                 if (complete) {
-                    FLDISPATCH_ASYNC_MAIN(^{
+                   RTDISPATCH_ASYNC_MAIN(^{
                         complete(success);
                     });
                 }
@@ -528,12 +583,12 @@
     }
     else{
         //把任务包装到事务里
-        [FLCURRENTDBQUEUE inTransaction:^(FMDatabase *db, BOOL *rollback){
+        [RTDatabaseQueue inTransaction:^(FMDatabase *db, BOOL *rollback){
             typeof(self) strongSelf = weakSelf;
             
             success = [strongSelf insert:db model:model autoCloseDB:autoCloseDB];
             if (complete) {
-                FLDISPATCH_ASYNC_MAIN(^{
+                RTDISPATCH_ASYNC_MAIN(^{
                     complete(success);
                 });
             }
@@ -553,7 +608,7 @@
     //    __block BOOL success = true;
     //    __weak typeof(self) weakSelf = self;
     //    //把任务包装到事务里
-    //    [FLCURRENTDBQUEUE inTransaction:^(FMDatabase *db, BOOL *rollback){
+    //    [RTDBManager inTransaction:^(FMDatabase *db, BOOL *rollback){
     //        typeof(self) strongSelf = weakSelf;
     //        NSLog(@"fl_insertModel----------------------db--%p",db);
     //        success = [strongSelf fl_insert:db modelArr:modelArr autoCloseDB:YES];
@@ -569,14 +624,14 @@
     //    }];
     
     __weak typeof(self) weakSelf = self;
-    FLDISPATCH_ASYNC_GLOBAL(^{
+    RTDISPATCH_ASYNC_GLOBAL(^{
         __strong typeof(weakSelf) strongSelf = weakSelf;
         for (NSInteger index = 0; index < modelArr.count; index ++) {
             id model = modelArr[index];
             if (index == modelArr.count - 1) {
                 [strongSelf insertSingleModel:model inAsync:NO autoCloseDB:autoCloseDB complete:^(BOOL flag) {
                     if (complete) {
-                        FLDISPATCH_ASYNC_MAIN(^{
+                        RTDISPATCH_ASYNC_MAIN(^{
                             complete(flag);
                         });
                     }
@@ -604,9 +659,6 @@
     }
     return success;
 }
-
-
-
 
 
 - (BOOL)insert:(FMDatabase *)db model:(id)model autoCloseDB:(BOOL)autoCloseDB{
@@ -659,8 +711,14 @@
                 return NO;
             }
         }
+        // 已经创建有对应的表，直接插入
         else{
+            //            BOOL success = [self fl_create:db table:[model class] autoCloseDB:NO];
+            //            if (success) {
+            //                NSLog(@"---------------------------success");
+            //            }
             NSString *dbid = [model valueForKey:@"FLDBID"];
+            
             id judgeModle = [self search:db model:[model class] byID:dbid autoCloseDB:NO];
             
             if ([[judgeModle valueForKey:@"FLDBID"] isEqualToString:dbid]) {
@@ -700,12 +758,12 @@
     __block BOOL success = true;
     __weak typeof(self) weakSelf = self;
     //把任务包装到事务里
-    FLDISPATCH_ASYNC_GLOBAL(^{
-        [FLCURRENTDBQUEUE inTransaction:^(FMDatabase *db, BOOL *rollback){
+    RTDISPATCH_ASYNC_GLOBAL(^{
+        [RTDatabaseQueue inTransaction:^(FMDatabase *db, BOOL *rollback){
             typeof(self) strongSelf = weakSelf;
             // 回调
             if (complete) {
-                FLDISPATCH_ASYNC_MAIN(^{
+                RTDISPATCH_ASYNC_MAIN(^{
                     complete([strongSelf search:db model:modelClass byID:FLDBID autoCloseDB:autoCloseDB]);
                 });
             }
@@ -749,7 +807,7 @@
                     key = [key stringByReplacingCharactersInRange:NSMakeRange(0, 1) withString:@""];
                 }
                 
-                id value = [rs objectForColumnName:key];
+                id value = [rs objectForColumn:key];
                 if ([value isKindOfClass:[NSString class]]) {
                     
                     NSData *data = [value dataUsingEncoding:NSUTF8StringEncoding];
@@ -813,7 +871,7 @@
                     key = [key stringByReplacingCharactersInRange:NSMakeRange(0, 1) withString:@""];
                 }
                 
-                id value = [rs objectForColumnName:key];
+                id value = [rs objectForColumn:key];
                 if ([value isKindOfClass:[NSString class]]) {
                     id result = [self string2ID:value];
                     if ([result isKindOfClass:[NSDictionary class]] || [result isKindOfClass:[NSMutableDictionary class]] || [result isKindOfClass:[NSArray class]] || [result isKindOfClass:[NSMutableArray class]]) {
@@ -1019,11 +1077,11 @@
     [db close];
 }
 
-void FLDISPATCH_ASYNC_GLOBAL(void(^block)()){
+void RTDISPATCH_ASYNC_GLOBAL(void(^block)()){
     dispatch_async(dispatch_get_global_queue(0, 0), block);
 }
 
-void FLDISPATCH_ASYNC_MAIN(void(^block)()){
+void RTDISPATCH_ASYNC_MAIN(void(^block)()){
     dispatch_async(dispatch_get_main_queue(), block);
 }
 @end

@@ -27,7 +27,7 @@
  
  *  建议使用insert创建表格并添加数据
  */
-- (void)fl_createTable:(Class)modelClass complete:(void(^)(BOOL flag))complete;
+- (void)createTable:(Class)modelClass complete:(void(^)(BOOL flag))complete;
 
 
 #pragma mark -- 插入
